@@ -1,0 +1,9 @@
+node_modules
+.git
+.env
+.env.*
+dist
+.manus
+.manus-logs
+attached_assets
+*.zip
