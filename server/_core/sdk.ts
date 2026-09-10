@@ -276,6 +276,13 @@ class SDKServer {
       throw ForbiddenError("Invalid session cookie");
     }
 
+    if (session.openId === "password-system-user") {
+      const systemUser = await db.getUserByOpenId(session.openId);
+      if (!systemUser) throw ForbiddenError("System user not found");
+      await db.upsertUser({ openId: systemUser.openId, lastSignedIn: new Date() });
+      return systemUser;
+    }
+
     if (session.openId.startsWith(CRON_OPEN_ID_PREFIX)) {
       const userInfo = await this.getUserInfoWithJwt(sessionToken ?? "");
       const taskUid = userInfo.taskUid ?? null;

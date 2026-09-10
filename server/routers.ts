@@ -1,11 +1,15 @@
 import { COOKIE_NAME } from "@shared/const";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
+import { sdk } from "./_core/sdk";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { storagePut } from "./storage";
-import { deleteAlbumItem, getDb, getMessageById, getPhotoById, listAlbumItems } from "./db";
+import { deleteAlbumItem, getDb, getMessageById, getPhotoById, listAlbumItems, upsertUser } from "./db";
 import { messages, photos, songs } from "../drizzle/schema";
+
+const SYSTEM_PASSWORD = "sereia";
+const SYSTEM_OPEN_ID = "password-system-user";
 
 const dateInput = z.string().datetime().or(z.string().date());
 const dataUrlInput = z.string().min(20).max(45_000_000);
@@ -46,6 +50,20 @@ export const appRouter = router({
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
+    passwordLogin: publicProcedure.input(z.object({ password: z.string().min(1) })).mutation(async ({ ctx, input }) => {
+      if (input.password !== SYSTEM_PASSWORD) {
+        throw new Error("Senha incorreta");
+      }
+      await upsertUser({
+        openId: SYSTEM_OPEN_ID,
+        name: "Coleção pessoal",
+        loginMethod: "password",
+        lastSignedIn: new Date(),
+      });
+      const sessionToken = await sdk.signSession({ openId: SYSTEM_OPEN_ID, appId: "password", name: "Coleção pessoal" });
+      ctx.res.cookie(COOKIE_NAME, sessionToken, getSessionCookieOptions(ctx.req));
+      return { success: true } as const;
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });

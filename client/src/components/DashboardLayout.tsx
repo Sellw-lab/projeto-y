@@ -19,10 +19,10 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { startLogin } from "@/const";
+import { trpc } from "@/lib/trpc";
 import { useIsMobile } from "@/hooks/useMobile";
 import { Heart, LogOut, PanelLeft, Sparkles } from "lucide-react";
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
@@ -47,6 +47,17 @@ export default function DashboardLayout({
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
   });
   const { loading, user } = useAuth();
+  const trpcUtils = trpc.useUtils();
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const passwordLogin = trpc.auth.passwordLogin.useMutation({
+    onSuccess: async () => {
+      setPassword("");
+      setPasswordError("");
+      await trpcUtils.auth.me.invalidate();
+    },
+    onError: () => setPasswordError("Senha incorreta. Tente novamente."),
+  });
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
@@ -57,24 +68,38 @@ export default function DashboardLayout({
   }
 
   if (!user) {
+    const handlePasswordSubmit = (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      setPasswordError("");
+      passwordLogin.mutate({ password });
+    };
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
-          <div className="flex flex-col items-center gap-6">
-            <h1 className="text-2xl font-semibold tracking-tight text-center">
-              Sign in to continue
-            </h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to launch the login flow.
-            </p>
+      <div className="flex min-h-screen items-center justify-center bg-paper px-4">
+        <div className="w-full max-w-md rounded-[1.5rem] border border-line bg-card p-8 shadow-[0_20px_60px_rgba(40,49,45,0.10)] sm:p-10">
+          <div className="mb-8 text-center">
+            <div className="avatar-mark mx-auto mb-5">♥</div>
+            <p className="eyebrow justify-center">arquivo pessoal · privado</p>
+            <h1 className="mt-3 font-serif text-4xl tracking-tight text-ink">Entrar no sistema</h1>
+            <p className="mt-3 text-sm leading-6 text-ink-muted">Digite a senha para acessar suas memórias.</p>
           </div>
-          <Button
-            onClick={() => startLogin()}
-            size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
-          >
-            Sign in
-          </Button>
+          <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <label className="field">
+              <span>Senha</span>
+              <input
+                type="password"
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                placeholder="Digite sua senha"
+                autoFocus
+                required
+                className="w-full rounded-xl border px-3 py-3 outline-none"
+              />
+            </label>
+            <Button type="submit" size="lg" disabled={passwordLogin.isPending} className="w-full rounded-full bg-coral text-white hover:bg-coral-dark">
+              {passwordLogin.isPending ? "Entrando..." : "Entrar"}
+            </Button>
+            <p className="min-h-5 text-center text-sm text-destructive" role="alert">{passwordError}</p>
+          </form>
         </div>
       </div>
     );
