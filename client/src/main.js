@@ -83,13 +83,14 @@ function compressImage(file) {
     const source = URL.createObjectURL(file);
     image.onload = () => {
       URL.revokeObjectURL(source);
-      const maxSide = 1800;
+      // Mantém qualidade HD sem enviar arquivos gigantes de câmeras de celular.
+      const maxSide = 2400;
       const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível preparar a foto.")), "image/jpeg", 0.82);
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível preparar a foto.")), "image/jpeg", 0.9);
     };
     image.onerror = () => { URL.revokeObjectURL(source); reject(new Error("Este formato de imagem não é compatível no celular.")); };
     image.src = source;
