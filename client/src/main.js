@@ -56,7 +56,7 @@ function card(item, index) {
   return `<article class="memory-card text-card ${item.type}"><span class="type-mark">${item.type === "song" ? "◒" : "“"}</span><h2>${item.title}</h2><p>${item.note || "Uma lembrança guardada com carinho."}</p><time>${dateLabel(item.date)}</time><button class="delete text-delete" data-delete="${item.id}">excluir</button></article>`;
 }
 function emptyState() { return `<div class="empty"><span>✦</span><h2>ainda não há nada por aqui</h2><p>Adicione a primeira lembrança do álbum.</p><button class="add-btn" id="empty-add">＋ nova memória</button></div>`; }
-function modal() { return `<div class="modal-backdrop" id="modal-backdrop"><section class="modal"><button class="close" id="close-modal">×</button><p class="eyebrow">nova entrada</p><h2>guardar uma memória</h2><p class="modal-subtitle">A foto ficará disponível para os membros do álbum.</p><form id="memory-form"><label>tipo<select name="type"><option value="photo">Foto</option><option value="message">Mensagem</option><option value="song">Música</option></select></label><label>título<input name="title" required placeholder="ex.: um domingo qualquer" /></label><div class="form-row"><label>data<input name="date" type="date" required value="${new Date().toISOString().slice(0, 10)}" /></label><label>arquivo<input name="file" type="file" accept="image/*" /></label></div><label>nota<input name="note" placeholder="O que você quer lembrar?" /></label><button class="add-btn full" type="submit">${state.busy ? "enviando..." : "guardar memória"} <span>↗</span></button></form></section></div>`; }
+function modal() { return `<div class="modal-backdrop" id="modal-backdrop"><section class="modal"><button class="close" id="close-modal">×</button><p class="eyebrow">nova entrada</p><h2>guardar uma memória</h2><p class="modal-subtitle">A foto ficará disponível para os membros do álbum.</p><form id="memory-form"><label>tipo<select name="type"><option value="photo">Foto</option><option value="message">Mensagem</option><option value="song">Música</option></select></label><label>título<input name="title" required placeholder="ex.: um domingo qualquer" /></label><div class="form-row"><label>data<input name="date" type="date" required value="${new Date().toISOString().slice(0, 10)}" /></label><label>arquivo<input name="file" type="file" accept="image/*" /></label></div><label>nota<input name="note" placeholder="O que você quer lembrar?" /></label>${state.message ? `<p class="form-message">${state.message}</p>` : ""}<button class="add-btn full" type="submit" ${state.busy ? "disabled" : ""}>${state.busy ? "enviando..." : "guardar memória"} <span>↗</span></button></form></section></div>`; }
 function bindEvents() {
   document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { state.active = button.dataset.tab; render(); }));
   document.querySelector("#search")?.addEventListener("input", (event) => { state.query = event.target.value; render(); const input = document.querySelector("#search"); input.focus(); input.setSelectionRange(state.query.length, state.query.length); });
@@ -77,13 +77,52 @@ async function renameAlbum() {
   if (error) { alert("Não foi possível alterar o nome agora."); return; }
   state.album = data; render();
 }
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const source = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(source);
+      const maxSide = 1800;
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível preparar a foto.")), "image/jpeg", 0.82);
+    };
+    image.onerror = () => { URL.revokeObjectURL(source); reject(new Error("Este formato de imagem não é compatível no celular.")); };
+    image.src = source;
+  });
+}
+
 async function handleMemory(event) {
-  event.preventDefault(); state.busy = true; render();
+  event.preventDefault();
+  if (state.busy) return;
   const data = new FormData(event.target); const type = data.get("type"); const file = data.get("file"); let filePath = null;
-  if (file?.size) { filePath = `${state.album.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`; const upload = await supabase.storage.from("memories").upload(filePath, file); if (upload.error) { state.busy = false; state.message = upload.error.message; render(); return; } }
-  const insert = await supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, title: data.get("title"), note: data.get("note") || null, date: data.get("date"), file_path: filePath }).select().single();
-  if (insert.error) { if (filePath) await supabase.storage.from("memories").remove([filePath]); state.busy = false; state.message = insert.error.message; render(); return; }
-  state.busy = false; state.modal = false; await loadMemories(); render();
+  if (type === "photo" && (!file || !file.size)) { state.message = "Escolha uma foto antes de guardar a memória."; render(); return; }
+  state.busy = true; state.message = ""; render();
+  try {
+    if (file?.size) {
+      if (!file.type.startsWith("image/")) throw new Error("Escolha um arquivo de imagem válido.");
+      const prepared = await Promise.race([
+        compressImage(file),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("A foto demorou demais para ser preparada. Tente uma imagem menor.")), 30000)),
+      ]);
+      filePath = `${state.album.id}/${crypto.randomUUID()}.jpg`;
+      const upload = await Promise.race([
+        supabase.storage.from("memories").upload(filePath, prepared, { contentType: "image/jpeg", cacheControl: "3600", upsert: false }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("O envio demorou demais. Verifique sua conexão e tente novamente.")), 60000)),
+      ]);
+      if (upload.error) throw new Error(upload.error.message);
+    }
+    const insert = await supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, title: data.get("title"), note: data.get("note") || null, date: data.get("date"), file_path: filePath }).select().single();
+    if (insert.error) throw new Error(insert.error.message);
+    state.busy = false; state.message = ""; state.modal = false; await loadMemories(); render();
+  } catch (error) {
+    if (filePath) await supabase.storage.from("memories").remove([filePath]);
+    state.busy = false; state.message = error instanceof Error ? error.message : "Não foi possível guardar a memória. Tente novamente."; render();
+  }
 }
 async function removeMemory(id) { const item = state.memories.find((memory) => memory.id === id); if (!item || !confirm("Excluir esta memória?")) return; const result = await supabase.from("memories").delete().eq("id", id); if (!result.error && item.file_path) await supabase.storage.from("memories").remove([item.file_path]); await loadMemories(); render(); }
 supabase.auth.getSession().then(({ data }) => { state.user = data.session?.user || null; startApp(); });
