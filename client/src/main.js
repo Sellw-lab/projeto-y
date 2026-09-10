@@ -1,0 +1,42 @@
+import "./style.css";
+
+const seedMemories = [
+  { id: 1, type: "photo", title: "domingo na varanda", date: "2024-06-16", note: "A luz mais bonita do inverno.", image: "https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1200&q=85", featured: true },
+  { id: 2, type: "photo", title: "fim de tarde", date: "2024-05-04", note: "Promessa de dias leves.", image: "https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=900&q=85" },
+  { id: 3, type: "photo", title: "casa cheia", date: "2024-03-29", note: "Todo mundo na mesma mesa.", image: "https://images.unsplash.com/photo-1511632765486-a01980e01a18?auto=format&fit=crop&w=900&q=85" },
+  { id: 4, type: "photo", title: "pequenas alegrias", date: "2024-02-11", note: "Um café, uma conversa e tempo.", image: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=85" },
+  { id: 5, type: "photo", title: "um lugar nosso", date: "2023-12-08", note: "Voltaria para cá mil vezes.", image: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=85" }
+];
+const state = { active: "Todas", query: "", memories: loadMemories(), modal: false };
+const app = document.querySelector("#app");
+const tabs = ["Todas", "Fotos", "Mensagens", "Músicas"];
+const icons = { Todas: "✦", Fotos: "▧", Mensagens: "▱", Músicas: "◒" };
+const typeMap = { Fotos: "photo", Mensagens: "message", Músicas: "song" };
+function loadMemories() { try { return JSON.parse(localStorage.getItem("entre-nos-memories")) || seedMemories; } catch { return seedMemories; } }
+function saveMemories() { localStorage.setItem("entre-nos-memories", JSON.stringify(state.memories)); }
+function dateLabel(date) { return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`)).replace(" de ", " ").replace(".", ""); }
+function filteredMemories() { return state.memories.filter((item) => (state.active === "Todas" || item.type === typeMap[state.active]) && (!state.query || `${item.title} ${item.note || ""}`.toLowerCase().includes(state.query.toLowerCase()))); }
+function count(type) { return state.memories.filter((item) => item.type === type).length; }
+function render() {
+  const memories = filteredMemories();
+  app.innerHTML = `<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><p class="sidebar-label">seu espaço</p><nav class="nav">${tabs.map((tab) => `<button class="nav-item ${state.active === tab ? "active" : ""}" data-tab="${tab}"><span class="nav-icon">${icons[tab]}</span><span>${tab}</span><span class="nav-count">${tab === "Todas" ? state.memories.length : count(typeMap[tab])}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="quote">“Guardar é uma forma de agradecer.”</div><button class="settings"><span>○</span> configurações</button><div class="profile"><div class="avatar">M</div><div><strong>Marina & Leo</strong><small>nosso álbum privado</small></div><span class="dots">•••</span></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" id="mobile-menu">☰</button><div class="crumb"><span>memórias</span><b>/</b><strong>${state.active.toLowerCase()}</strong></div><div class="top-actions"><label class="search"><span>⌕</span><input id="search" placeholder="Buscar nas memórias..." value="${state.query}" /></label><button class="icon-btn">♢</button><button class="add-btn" id="open-modal"><span>＋</span> nova memória</button></div></header><section class="content"><div class="intro"><div><p class="eyebrow">quarta-feira, 18 de setembro</p><h1>o que fica, <em>fica aqui.</em></h1><p class="lead">Um lugar para guardar os instantes que merecem durar um pouco mais.</p></div><div class="intro-note"><span>✻</span><p>“A vida é feita<br/>de pequenos<br/><b>encontros.</b>”</p></div></div><div class="toolbar"><div class="filters">${tabs.map((tab) => `<button class="filter ${state.active === tab ? "selected" : ""}" data-tab="${tab}">${tab}</button>`).join("")}</div><button class="sort">mais recentes <span>⌄</span></button></div><div class="memory-grid">${memories.length ? memories.map((item, index) => card(item, index)).join("") : emptyState()}</div><div class="footer-line"><span>mostrando ${memories.length} de ${state.memories.length} memórias</span><span class="line"></span><span>feito com cuidado <span class="heart">♥</span></span></div></section></main></div>${state.modal ? modal() : ""}`;
+  bindEvents();
+}
+function card(item, index) {
+  if (item.type === "photo") return `<article class="memory-card ${item.featured || index === 0 ? "wide" : ""}"><div class="photo-wrap"><img src="${item.image}" alt="${item.title}"/><div class="photo-overlay"><span>${String(index + 1).padStart(2, "0")}</span><button class="delete" data-delete="${item.id}" aria-label="Excluir">×</button></div></div><div class="card-meta"><div><h2>${item.title}</h2><p>${item.note || "Uma lembrança especial."}</p></div><time>${dateLabel(item.date)}</time></div></article>`;
+  return `<article class="memory-card text-card ${item.type}"><span class="type-mark">${item.type === "song" ? "◒" : "“"}</span><h2>${item.title}</h2><p>${item.note || "Uma lembrança guardada com carinho."}</p><time>${dateLabel(item.date)}</time><button class="delete text-delete" data-delete="${item.id}">excluir</button></article>`;
+}
+function emptyState() { return `<div class="empty"><span>✦</span><h2>ainda não há nada por aqui</h2><p>Que tal guardar uma nova lembrança?</p><button class="add-btn" id="empty-add">＋ nova memória</button></div>`; }
+function modal() { return `<div class="modal-backdrop" id="modal-backdrop"><section class="modal"><button class="close" id="close-modal">×</button><p class="eyebrow">nova entrada</p><h2>guardar uma memória</h2><p class="modal-subtitle">Preencha os detalhes desse instante.</p><form id="memory-form"><label>tipo<select name="type"><option value="photo">Foto</option><option value="message">Mensagem</option><option value="song">Música</option></select></label><label>título<input name="title" required placeholder="ex.: um domingo qualquer" /></label><div class="form-row"><label>data<input name="date" type="date" required value="${new Date().toISOString().slice(0, 10)}" /></label><label>imagem (URL)<input name="image" placeholder="opcional para fotos" /></label></div><label>nota<input name="note" placeholder="O que você quer lembrar?" /></label><button class="add-btn full" type="submit">guardar memória <span>↗</span></button></form></section></div>`; }
+function bindEvents() {
+  document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { state.active = button.dataset.tab; render(); }));
+  document.querySelector("#search")?.addEventListener("input", (event) => { state.query = event.target.value; render(); const input = document.querySelector("#search"); input.focus(); input.setSelectionRange(state.query.length, state.query.length); });
+  document.querySelector("#open-modal")?.addEventListener("click", () => { state.modal = true; render(); });
+  document.querySelector("#empty-add")?.addEventListener("click", () => { state.modal = true; render(); });
+  document.querySelector("#close-modal")?.addEventListener("click", () => { state.modal = false; render(); });
+  document.querySelector("#modal-backdrop")?.addEventListener("click", (event) => { if (event.target.id === "modal-backdrop") { state.modal = false; render(); } });
+  document.querySelector("#memory-form")?.addEventListener("submit", (event) => { event.preventDefault(); const data = new FormData(event.target); const type = data.get("type"); state.memories.unshift({ id: Date.now(), type, title: data.get("title"), date: data.get("date"), note: data.get("note"), image: data.get("image") || "https://images.unsplash.com/photo-1511988617509-a57c8a288659?auto=format&fit=crop&w=1200&q=85" }); saveMemories(); state.modal = false; state.active = "Todas"; render(); });
+  document.querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => { state.memories = state.memories.filter((item) => item.id !== Number(button.dataset.delete)); saveMemories(); render(); }));
+  document.querySelector("#mobile-menu")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open"));
+}
+render();
