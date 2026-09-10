@@ -37,13 +37,22 @@ async function startApp() {
 }
 async function loadMemories() {
   if (!state.album) return;
-  const { data, error } = await supabase.from("memories").select("id,type,title,note,date,file_path,created_at").eq("album_id", state.album.id).order("created_at", { ascending: false });
+  const result = await withTimeout(supabase.from("memories").select("id,type,title,note,date,file_path,created_at").eq("album_id", state.album.id).order("created_at", { ascending: false }), 30000, "Não foi possível carregar as memórias. Verifique sua conexão e tente novamente.");
+  const { data, error } = result;
   if (error) { state.message = "Não foi possível carregar as memórias."; return; }
   state.memories = await Promise.all((data || []).map(async (item) => {
     let image = "";
-    if (item.file_path) { const signed = await supabase.storage.from("memories").createSignedUrl(item.file_path, 3600); image = signed.data?.signedUrl || ""; }
+    if (item.file_path) { const signed = await withTimeout(supabase.storage.from("memories").createSignedUrl(item.file_path, 3600), 15000, "Não foi possível carregar uma imagem."); image = signed.data?.signedUrl || ""; }
     return { ...item, image };
   }));
+}
+
+function withTimeout(promise, milliseconds, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 function render() {
   if (!state.user) return authView();
@@ -106,22 +115,19 @@ async function handleMemory(event) {
   try {
     if (file?.size) {
       if (!file.type.startsWith("image/")) throw new Error("Escolha um arquivo de imagem válido.");
-      const prepared = await Promise.race([
-        compressImage(file),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("A foto demorou demais para ser preparada. Tente uma imagem menor.")), 30000)),
-      ]);
+      const prepared = await withTimeout(compressImage(file), 30000, "A foto demorou demais para ser preparada. Tente uma imagem menor.");
       filePath = `${state.album.id}/${crypto.randomUUID()}.jpg`;
-      const upload = await Promise.race([
-        supabase.storage.from("memories").upload(filePath, prepared, { contentType: "image/jpeg", cacheControl: "3600", upsert: false }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("O envio demorou demais. Verifique sua conexão e tente novamente.")), 60000)),
-      ]);
+      const upload = await withTimeout(supabase.storage.from("memories").upload(filePath, prepared, { contentType: "image/jpeg", cacheControl: "3600", upsert: false }), 60000, "O envio demorou demais. Verifique sua conexão e tente novamente.");
       if (upload.error) throw new Error(upload.error.message);
     }
-    const insert = await supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, title: data.get("title"), note: data.get("note") || null, date: data.get("date"), file_path: filePath }).select().single();
+    const insert = await withTimeout(supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, title: data.get("title"), note: data.get("note") || null, date: data.get("date"), file_path: filePath }).select().single(), 30000, "O registro demorou demais. Verifique sua conexão e tente novamente.");
     if (insert.error) throw new Error(insert.error.message);
-    state.busy = false; state.message = ""; state.modal = false; await loadMemories(); render();
+    filePath = null;
+    state.busy = false; state.message = ""; state.modal = false; render();
+    await loadMemories();
+    render();
   } catch (error) {
-    if (filePath) await supabase.storage.from("memories").remove([filePath]);
+    if (filePath) await withTimeout(supabase.storage.from("memories").remove([filePath]), 10000, "").catch(() => {});
     state.busy = false; state.message = error instanceof Error ? error.message : "Não foi possível guardar a memória. Tente novamente."; render();
   }
 }
