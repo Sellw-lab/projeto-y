@@ -1,19 +1,23 @@
 import { createClient } from "@supabase/supabase-js";
+import exifr from "exifr";
 import "./style.css";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://zcrwrvftibsthfcglujo.supabase.co";
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_RqX2tVnQRgM3dkBBDkGHLA_w80YQ8LB";
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const ALBUM_SLUG = "marina-leo";
-const tabs = ["Todas", "Fotos", "Mensagens", "Músicas"];
-const icons = { Todas: "✦", Fotos: "▧", Mensagens: "▱", Músicas: "◒" };
-const typeMap = { Fotos: "photo", Mensagens: "message", Músicas: "song" };
-const state = { user: null, album: null, active: "Todas", query: "", memories: [], modal: false, authMode: "login", busy: false, loading: false, message: "", realtimeChannel: null };
+const tabs = ["Todas", "Fotos", "Vídeos", "Mensagens", "Músicas"];
+const icons = { Todas: "✦", Fotos: "▧", Vídeos: "▷", Mensagens: "▱", Músicas: "◒" };
+const typeMap = { Fotos: "photo", Vídeos: "video", Mensagens: "message", Músicas: "song" };
+const state = { user: null, album: null, active: "Todas", query: "", memories: [], modal: false, editing: null, authMode: "login", busy: false, loading: false, message: "", realtimeChannel: null };
 const app = document.querySelector("#app");
 
 function dateLabel(date) { return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`)).replace(" de ", " ").replace(".", ""); }
 function count(type) { return state.memories.filter((item) => item.type === type).length; }
 function filteredMemories() { return state.memories.filter((item) => (state.active === "Todas" || item.type === typeMap[state.active]) && (!state.query || `${item.title} ${item.note || ""}`.toLowerCase().includes(state.query.toLowerCase()))); }
+function spotifyEmbed(url) { try { const parsed = new URL(url); const parts = parsed.pathname.split("/").filter(Boolean); const kind = parts[0]; const id = parts[1]; return kind && id && ["track", "album", "playlist", "episode", "show"].includes(kind) ? `https://open.spotify.com/embed/${kind}/${id}?utm_source=generator` : url; } catch { return url; } }
+function dateFromExif(value) { const date = value instanceof Date ? value : new Date(value); return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10); }
+async function detectPhotoDate(file) { if (!file?.type.startsWith("image/")) return ""; try { const metadata = await exifr.parse(file, { pick: ["DateTimeOriginal", "CreateDate", "ModifyDate"] }); return dateFromExif(metadata?.DateTimeOriginal || metadata?.CreateDate || metadata?.ModifyDate) || dateFromExif(file.lastModified); } catch { return dateFromExif(file.lastModified); } }
 function authView() {
   app.innerHTML = `<main class="auth-page"><div class="auth-art"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><div class="auth-art-copy"><p class="eyebrow">um espaço só nosso</p><h1>o que fica,<br/><em>fica aqui.</em></h1><p>Guarde os pequenos instantes que fazem a vida valer a pena.</p></div><span class="auth-flower">✻</span></div><section class="auth-panel"><div class="auth-box"><p class="eyebrow">${state.authMode === "login" ? "bem-vindos de volta" : "começar um álbum"}</p><h2>${state.authMode === "login" ? "entrar no álbum" : "criar seu acesso"}</h2><p class="auth-subtitle">${state.authMode === "login" ? "Entre para continuar guardando suas memórias." : "Use seu e-mail. Depois sua namorada poderá criar o acesso dela."}</p><form id="auth-form"><label>e-mail<input name="email" type="email" required placeholder="voce@email.com" autocomplete="email" /></label><label>senha<input name="password" type="password" required minlength="6" placeholder="mínimo de 6 caracteres" autocomplete="${state.authMode === "login" ? "current-password" : "new-password"}" /></label><button class="add-btn full" type="submit">${state.busy ? "aguarde..." : state.authMode === "login" ? "entrar" : "criar acesso"} <span>↗</span></button></form>${state.message ? `<p class="auth-message">${state.message}</p>` : ""}<button class="auth-switch" id="auth-switch">${state.authMode === "login" ? "Ainda não tenho acesso → criar conta" : "Já tenho uma conta → entrar"}</button></div></section></main>`;
   document.querySelector("#auth-form").addEventListener("submit", handleAuth);
@@ -50,12 +54,12 @@ async function startApp() {
 async function loadMemories() {
   if (!state.album) return;
   try {
-    const result = await withTimeout(supabase.from("memories").select("id,type,title,note,date,file_path,created_at").eq("album_id", state.album.id).order("created_at", { ascending: false }), 30000, "Não foi possível carregar as memórias. Verifique sua conexão e tente novamente.");
+    const result = await withTimeout(supabase.from("memories").select("id,type,title,note,date,file_path,mime_type,source_url,created_at").eq("album_id", state.album.id).order("date", { ascending: false }).order("created_at", { ascending: false }), 30000, "Não foi possível carregar as memórias. Verifique sua conexão e tente novamente.");
     if (result.error) throw new Error(result.error.message);
     state.memories = await Promise.all((result.data || []).map(async (item) => {
       let image = "";
       if (item.file_path) {
-        const signed = await withTimeout(supabase.storage.from("memories").createSignedUrl(item.file_path, 1500), 15000, "Não foi possível carregar uma imagem.");
+        const signed = await withTimeout(supabase.storage.from("memories").createSignedUrl(item.file_path, 1500), 15000, "Não foi possível carregar uma mídia.");
         if (!signed.error) image = signed.data?.signedUrl || "";
       }
       return { ...item, image };
@@ -90,11 +94,13 @@ function render() {
   bindEvents();
 }
 function card(item, index) {
-  if (item.type === "photo") return `<article class="memory-card ${index === 0 ? "wide" : ""}"><div class="photo-wrap">${item.image ? `<img src="${item.image}" alt="${item.title}"/>` : `<div class="photo-placeholder">imagem indisponível</div>`}<div class="photo-overlay"><span>${String(index + 1).padStart(2, "0")}</span><button class="delete" data-delete="${item.id}" aria-label="Excluir">×</button></div></div><div class="card-meta"><div><h2>${item.title}</h2><p>${item.note || "Uma lembrança especial."}</p></div><time>${dateLabel(item.date)}</time></div></article>`;
-  return `<article class="memory-card text-card ${item.type}"><span class="type-mark">${item.type === "song" ? "◒" : "“"}</span><h2>${item.title}</h2><p>${item.note || "Uma lembrança guardada com carinho."}</p><time>${dateLabel(item.date)}</time><button class="delete text-delete" data-delete="${item.id}">excluir</button></article>`;
+  const media = item.type === "photo" ? (item.image ? `<img src="${item.image}" alt="${item.title}"/>` : `<div class="photo-placeholder">imagem indisponível</div>`) : item.type === "video" ? (item.image ? `<video src="${item.image}" controls preload="metadata"></video>` : `<div class="photo-placeholder">vídeo indisponível</div>`) : item.type === "message" && item.mime_type?.startsWith("audio/") ? (item.image ? `<audio src="${item.image}" controls></audio>` : `<div class="photo-placeholder">áudio indisponível</div>`) : "";
+  if (media) return `<article class="memory-card ${index === 0 ? "wide" : ""}"><div class="photo-wrap">${media}<div class="photo-overlay"><span>${String(index + 1).padStart(2, "0")}</span><button class="edit" data-edit="${item.id}" aria-label="Editar">✎</button><button class="delete" data-delete="${item.id}" aria-label="Excluir">×</button></div></div><div class="card-meta"><div><h2>${item.title}</h2><p>${item.note || "Uma lembrança especial."}</p></div><time>${dateLabel(item.date)}</time></div></article>`;
+  if (item.type === "song") return `<article class="memory-card text-card song"><span class="type-mark">◒</span><h2>${item.title}</h2><p>${item.note || "Uma música guardada com carinho."}</p>${item.source_url ? `<iframe class="spotify-player" src="${spotifyEmbed(item.source_url)}" title="${item.title}" frameborder="0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe><a class="spotify-link" href="${item.source_url}" target="_blank" rel="noreferrer">abrir no Spotify ↗</a>` : ""}<time>${dateLabel(item.date)}</time><button class="edit text-edit" data-edit="${item.id}">editar</button><button class="delete text-delete" data-delete="${item.id}">excluir</button></article>`;
+  return `<article class="memory-card text-card ${item.type}"><span class="type-mark">${item.type === "message" ? "“" : "✦"}</span><h2>${item.title}</h2><p>${item.note || "Uma lembrança guardada com carinho."}</p><time>${dateLabel(item.date)}</time><button class="edit text-edit" data-edit="${item.id}">editar</button><button class="delete text-delete" data-delete="${item.id}">excluir</button></article>`;
 }
 function emptyState() { return `<div class="empty"><span>✦</span><h2>ainda não há nada por aqui</h2><p>Adicione a primeira lembrança do álbum.</p><button class="add-btn" id="empty-add">＋ nova memória</button></div>`; }
-function modal() { return `<div class="modal-backdrop" id="modal-backdrop"><section class="modal"><button class="close" id="close-modal">×</button><p class="eyebrow">nova entrada</p><h2>guardar uma memória</h2><p class="modal-subtitle">A foto ficará disponível para os membros do álbum.</p><form id="memory-form"><label>tipo<select name="type"><option value="photo">Foto</option><option value="message">Mensagem</option><option value="song">Música</option></select></label><label>título<input name="title" required placeholder="ex.: um domingo qualquer" /></label><div class="form-row"><label>data<input name="date" type="date" required value="${new Date().toISOString().slice(0, 10)}" /></label><label>arquivo<input name="file" type="file" accept="image/*" /></label></div><label>nota<input name="note" placeholder="O que você quer lembrar?" /></label>${state.message ? `<p class="form-message">${state.message}</p>` : ""}<button class="add-btn full" type="submit" ${state.busy ? "disabled" : ""}>${state.busy ? "enviando..." : "guardar memória"} <span>↗</span></button></form></section></div>`; }
+function modal() { const item = state.editing; const initialDate = item?.date || ""; return `<div class="modal-backdrop" id="modal-backdrop"><section class="modal"><button class="close" id="close-modal">×</button><p class="eyebrow">${item ? "editar entrada" : "nova entrada"}</p><h2>${item ? "editar memória" : "guardar uma memória"}</h2><p class="modal-subtitle">Fotos, vídeos e áudios ficam disponíveis para os membros do álbum.</p><form id="memory-form"><label>tipo<select name="type" ${item ? "disabled" : ""}><option value="photo" ${item?.type === "photo" ? "selected" : ""}>Foto</option><option value="video" ${item?.type === "video" ? "selected" : ""}>Vídeo</option><option value="message" ${item?.type === "message" ? "selected" : ""}>Mensagem / áudio</option><option value="song" ${item?.type === "song" ? "selected" : ""}>Música</option></select></label><label>título<input name="title" required value="${item?.title || ""}" placeholder="ex.: um domingo qualquer" /></label><div class="form-row"><label>data<input name="date" type="date" value="${initialDate}" /><small>Ao escolher uma foto, tentaremos preencher pela data original.</small></label><label>arquivo<input name="file" type="file" accept="image/*,video/*,audio/*" /></label></div><label>nota / mensagem do WhatsApp<textarea name="note" rows="4" placeholder="Cole aqui o texto da mensagem ou escreva uma nota...">${item?.note || ""}</textarea></label><label>link do Spotify (opcional)<input name="source_url" type="url" value="${item?.source_url || ""}" placeholder="https://open.spotify.com/track/..." /></label>${state.message ? `<p class="form-message">${state.message}</p>` : ""}<button class="add-btn full" type="submit" ${state.busy ? "disabled" : ""}>${state.busy ? "enviando..." : item ? "salvar alterações" : "guardar memória"} <span>↗</span></button></form></section></div>`; }
 function bindEvents() {
   document.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { state.active = button.dataset.tab; render(); }));
   document.querySelector("#search")?.addEventListener("input", (event) => { state.query = event.target.value; render(); const input = document.querySelector("#search"); input.focus(); input.setSelectionRange(state.query.length, state.query.length); });
@@ -106,6 +112,8 @@ function bindEvents() {
   ["#refresh-album", "#refresh-top", "#refresh-album-main"].forEach((selector) => document.querySelector(selector)?.addEventListener("click", async () => { await loadMemories(); render(); }));
   document.querySelector("#logout")?.addEventListener("click", async () => { if (state.realtimeChannel) await supabase.removeChannel(state.realtimeChannel); state.realtimeChannel = null; await supabase.auth.signOut(); state.user = null; state.album = null; state.memories = []; authView(); });
   document.querySelector("#memory-form")?.addEventListener("submit", handleMemory);
+  document.querySelector("#memory-form input[name=file]")?.addEventListener("change", async (event) => { const date = await detectPhotoDate(event.target.files?.[0]); const dateInput = document.querySelector("#memory-form input[name=date]"); if (date && dateInput && !dateInput.value) dateInput.value = date; });
+  document.querySelectorAll("[data-edit]").forEach((button) => button.addEventListener("click", () => { state.editing = state.memories.find((item) => item.id === button.dataset.edit) || null; state.modal = true; state.message = ""; render(); }));
   document.querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => removeMemory(button.dataset.delete)));
   document.querySelector("#mobile-menu")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open"));
 }
@@ -139,25 +147,31 @@ function compressImage(file) {
 async function handleMemory(event) {
   event.preventDefault();
   if (state.busy) return;
-  const data = new FormData(event.target); const type = data.get("type"); const file = data.get("file"); let filePath = null;
-  if (type === "photo" && (!file || !file.size)) { state.message = "Escolha uma foto antes de guardar a memória."; render(); return; }
+  const data = new FormData(event.target); const type = state.editing?.type || data.get("type"); const file = data.get("file"); let filePath = state.editing?.file_path || null; let uploadedPath = null;
+  if (!state.editing && ["photo", "video"].includes(type) && (!file || !file.size)) { state.message = "Escolha um arquivo antes de guardar a memória."; render(); return; }
+  if (type === "song" && data.get("source_url") && !/^https?:\/\/(open\.)?spotify\.com\//i.test(data.get("source_url"))) { state.message = "Use um link válido do Spotify."; render(); return; }
   state.busy = true; state.message = ""; render();
   try {
     if (file?.size) {
-      if (!file.type.startsWith("image/")) throw new Error("Escolha um arquivo de imagem válido.");
-      const prepared = await withTimeout(compressImage(file), 30000, "A foto demorou demais para ser preparada. Tente uma imagem menor.");
-      filePath = `${state.album.id}/${crypto.randomUUID()}.jpg`;
-      const upload = await withTimeout(supabase.storage.from("memories").upload(filePath, prepared, { contentType: "image/jpeg", cacheControl: "3600", upsert: false }), 60000, "O envio demorou demais. Verifique sua conexão e tente novamente.");
+      if (!["photo", "video", "message"].includes(type) || !["image/", "video/", "audio/"].some((kind) => file.type.startsWith(kind))) throw new Error("Escolha um arquivo compatível com o tipo selecionado.");
+      const prepared = type === "photo" ? await withTimeout(compressImage(file), 30000, "A foto demorou demais para ser preparada. Tente uma imagem menor.") : file;
+      uploadedPath = `${state.album.id}/${crypto.randomUUID()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
+      const upload = await withTimeout(supabase.storage.from("memories").upload(uploadedPath, prepared, { contentType: type === "photo" ? "image/jpeg" : file.type, cacheControl: "3600", upsert: false }), 60000, "O envio demorou demais. Verifique sua conexão e tente novamente.");
       if (upload.error) throw new Error(upload.error.message);
+      filePath = uploadedPath;
     }
-    const insert = await withTimeout(supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, title: data.get("title"), note: data.get("note") || null, date: data.get("date"), file_path: filePath }).select().single(), 30000, "O registro demorou demais. Verifique sua conexão e tente novamente.");
-    if (insert.error) throw new Error(insert.error.message);
-    filePath = null;
+    const selectedDate = data.get("date") || await detectPhotoDate(file) || new Date().toISOString().slice(0, 10);
+    const payload = { title: data.get("title"), note: data.get("note") || null, date: selectedDate, file_path: filePath, mime_type: file?.type || state.editing?.mime_type || null, source_url: data.get("source_url") || null };
+    const result = state.editing ? await withTimeout(supabase.from("memories").update(payload).eq("id", state.editing.id).eq("album_id", state.album.id).select().single(), 30000, "Não foi possível salvar as alterações.") : await withTimeout(supabase.from("memories").insert({ album_id: state.album.id, user_id: state.user.id, type, ...payload }).select().single(), 30000, "O registro demorou demais. Verifique sua conexão e tente novamente.");
+    if (result.error) throw new Error(result.error.message);
+    if (state.editing && uploadedPath && state.editing.file_path) await supabase.storage.from("memories").remove([state.editing.file_path]);
+    uploadedPath = null;
     state.busy = false; state.message = ""; state.modal = false; render();
+    state.editing = null;
     await loadMemories();
     render();
   } catch (error) {
-    if (filePath) await withTimeout(supabase.storage.from("memories").remove([filePath]), 10000, "").catch(() => {});
+    if (uploadedPath) await withTimeout(supabase.storage.from("memories").remove([uploadedPath]), 10000, "").catch(() => {});
     state.busy = false; state.message = error instanceof Error ? error.message : "Não foi possível guardar a memória. Tente novamente."; render();
   }
 }
