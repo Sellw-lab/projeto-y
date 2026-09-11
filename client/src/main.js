@@ -8,7 +8,7 @@ const ALBUM_SLUG = "marina-leo";
 const tabs = ["Todas", "Fotos", "Mensagens", "Músicas"];
 const icons = { Todas: "✦", Fotos: "▧", Mensagens: "▱", Músicas: "◒" };
 const typeMap = { Fotos: "photo", Mensagens: "message", Músicas: "song" };
-const state = { user: null, album: null, active: "Todas", query: "", memories: [], modal: false, authMode: "login", busy: false, message: "" };
+const state = { user: null, album: null, active: "Todas", query: "", memories: [], modal: false, authMode: "login", busy: false, loading: false, message: "", realtimeChannel: null };
 const app = document.querySelector("#app");
 
 function dateLabel(date) { return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`)).replace(" de ", " ").replace(".", ""); }
@@ -30,21 +30,50 @@ async function handleAuth(event) {
 }
 async function startApp() {
   if (!state.user) { authView(); return; }
-  await supabase.rpc("claim_album_membership");
-  const { data: album } = await supabase.from("albums").select("id,name").eq("slug", ALBUM_SLUG).single();
-  state.album = album;
-  await loadMemories(); render();
+  state.loading = true; state.message = ""; render();
+  try {
+    const membership = await withTimeout(supabase.rpc("claim_album_membership"), 15000, "Não foi possível preparar seu acesso ao álbum.");
+    if (membership.error) throw new Error(membership.error.message);
+    const albumResult = await withTimeout(supabase.from("albums").select("id,name").eq("slug", ALBUM_SLUG).single(), 15000, "Não foi possível localizar o álbum.");
+    if (albumResult.error || !albumResult.data) throw new Error(albumResult.error?.message || "Álbum não encontrado.");
+    state.album = albumResult.data;
+    await loadMemories();
+    subscribeToMemories();
+  } catch (error) {
+    state.album = null;
+    state.message = error instanceof Error ? error.message : "Não foi possível abrir o álbum.";
+  } finally {
+    state.loading = false;
+    render();
+  }
 }
 async function loadMemories() {
   if (!state.album) return;
-  const result = await withTimeout(supabase.from("memories").select("id,type,title,note,date,file_path,created_at").eq("album_id", state.album.id).order("created_at", { ascending: false }), 30000, "Não foi possível carregar as memórias. Verifique sua conexão e tente novamente.");
-  const { data, error } = result;
-  if (error) { state.message = "Não foi possível carregar as memórias."; return; }
-  state.memories = await Promise.all((data || []).map(async (item) => {
-    let image = "";
-    if (item.file_path) { const signed = await withTimeout(supabase.storage.from("memories").createSignedUrl(item.file_path, 3600), 15000, "Não foi possível carregar uma imagem."); image = signed.data?.signedUrl || ""; }
-    return { ...item, image };
-  }));
+  try {
+    const result = await withTimeout(supabase.from("memories").select("id,type,title,note,date,file_path,created_at").eq("album_id", state.album.id).order("created_at", { ascending: false }), 30000, "Não foi possível carregar as memórias. Verifique sua conexão e tente novamente.");
+    if (result.error) throw new Error(result.error.message);
+    state.memories = await Promise.all((result.data || []).map(async (item) => {
+      let image = "";
+      if (item.file_path) {
+        const signed = await withTimeout(supabase.storage.from("memories").createSignedUrl(item.file_path, 1500), 15000, "Não foi possível carregar uma imagem.");
+        if (!signed.error) image = signed.data?.signedUrl || "";
+      }
+      return { ...item, image };
+    }));
+    state.message = "";
+  } catch (error) {
+    state.message = error instanceof Error ? error.message : "Não foi possível carregar as memórias.";
+  }
+}
+function subscribeToMemories() {
+  if (!state.album) return;
+  if (state.realtimeChannel) supabase.removeChannel(state.realtimeChannel);
+  state.realtimeChannel = supabase.channel(`album-memories-${state.album.id}`)
+    .on("postgres_changes", { event: "*", schema: "public", table: "memories", filter: `album_id=eq.${state.album.id}` }, async () => {
+      await loadMemories();
+      render();
+    })
+    .subscribe();
 }
 
 function withTimeout(promise, milliseconds, message) {
@@ -57,7 +86,7 @@ function withTimeout(promise, milliseconds, message) {
 function render() {
   if (!state.user) return authView();
   const memories = filteredMemories();
-  app.innerHTML = `<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><p class="sidebar-label">seu espaço</p><nav class="nav">${tabs.map((tab) => `<button class="nav-item ${state.active === tab ? "active" : ""}" data-tab="${tab}"><span class="nav-icon">${icons[tab]}</span><span>${tab}</span><span class="nav-count">${tab === "Todas" ? state.memories.length : count(typeMap[tab])}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="quote">“Guardar é uma forma de agradecer.”</div><button class="settings" id="rename-album"><span>✎</span> editar nome do álbum</button><button class="settings" id="logout"><span>↪</span> sair da conta</button><div class="profile"><div class="avatar">${(state.user.email || "M")[0].toUpperCase()}</div><div><strong>${state.user.email}</strong><small>álbum privado</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" id="mobile-menu">☰</button><div class="crumb"><span>memórias</span><b>/</b><strong>${state.active.toLowerCase()}</strong></div><div class="top-actions"><label class="search"><span>⌕</span><input id="search" placeholder="Buscar nas memórias..." value="${state.query}" /></label><button class="icon-btn">♢</button><button class="add-btn" id="open-modal"><span>＋</span> nova memória</button></div></header><section class="content"><div class="intro"><div><p class="eyebrow album-kicker">álbum compartilhado</p><h1><span class="album-name">${state.album?.name || "Nosso álbum"}</span></h1><p class="album-strapline">o que fica, <em>fica aqui.</em></p><p class="lead">Um lugar para guardar os instantes que merecem durar um pouco mais.</p></div><div class="intro-note"><span>✻</span><p>“A vida é feita<br/>de pequenos<br/><b>encontros.</b>”</p></div></div><div class="toolbar"><div class="filters">${tabs.map((tab) => `<button class="filter ${state.active === tab ? "selected" : ""}" data-tab="${tab}">${tab}</button>`).join("")}</div><button class="sort">mais recentes <span>⌄</span></button></div><div class="memory-grid">${memories.length ? memories.map((item, index) => card(item, index)).join("") : emptyState()}</div><div class="footer-line"><span>mostrando ${memories.length} de ${state.memories.length} memórias</span><span class="line"></span><span>feito com cuidado <span class="heart">♥</span></span></div></section></main></div>${state.modal ? modal() : ""}`;
+  app.innerHTML = `<div class="shell"><aside class="sidebar" id="sidebar"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><p class="sidebar-label">seu espaço</p><nav class="nav">${tabs.map((tab) => `<button class="nav-item ${state.active === tab ? "active" : ""}" data-tab="${tab}"><span class="nav-icon">${icons[tab]}</span><span>${tab}</span><span class="nav-count">${tab === "Todas" ? state.memories.length : count(typeMap[tab])}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="quote">“Guardar é uma forma de agradecer.”</div><button class="settings" id="rename-album"><span>✎</span> editar nome do álbum</button><button class="settings" id="refresh-album"><span>↻</span> atualizar álbum</button><button class="settings" id="logout"><span>↪</span> sair da conta</button><div class="profile"><div class="avatar">${(state.user.email || "M")[0].toUpperCase()}</div><div><strong>${state.user.email}</strong><small>álbum privado</small></div></div></div></aside><main class="main"><header class="topbar"><button class="mobile-menu" id="mobile-menu">☰</button><div class="crumb"><span>memórias</span><b>/</b><strong>${state.active.toLowerCase()}</strong></div><div class="top-actions"><label class="search"><span>⌕</span><input id="search" placeholder="Buscar nas memórias..." value="${state.query}" /></label><button class="icon-btn" id="refresh-top" title="Atualizar álbum">↻</button><button class="add-btn" id="open-modal"><span>＋</span> nova memória</button></div></header><section class="content"><div class="intro"><div><p class="eyebrow album-kicker">álbum compartilhado</p><h1><span class="album-name">${state.album?.name || "Nosso álbum"}</span></h1><p class="album-strapline">o que fica, <em>fica aqui.</em></p><p class="lead">Um lugar para guardar os instantes que merecem durar um pouco mais.</p></div><div class="intro-note"><span>✻</span><p>“A vida é feita<br/>de pequenos<br/><b>encontros.</b>”</p></div></div><div class="toolbar"><div class="filters">${tabs.map((tab) => `<button class="filter ${state.active === tab ? "selected" : ""}" data-tab="${tab}">${tab}</button>`).join("")}</div><button class="sort">mais recentes <span>⌄</span></button></div>${state.loading ? `<div class="empty"><span>↻</span><h2>carregando o álbum</h2><p>Buscando as atualizações mais recentes.</p></div>` : state.message && !state.album ? `<div class="empty"><span>!</span><h2>não foi possível abrir o álbum</h2><p>${state.message}</p><button class="add-btn" id="refresh-album-main">↻ tentar novamente</button></div>` : `<div class="memory-grid">${memories.length ? memories.map((item, index) => card(item, index)).join("") : emptyState()}</div>`}<div class="footer-line"><span>mostrando ${memories.length} de ${state.memories.length} memórias</span><span class="line"></span><span>feito com cuidado <span class="heart">♥</span></span></div></section></main></div>${state.modal ? modal() : ""}`;
   bindEvents();
 }
 function card(item, index) {
@@ -74,7 +103,8 @@ function bindEvents() {
   document.querySelector("#close-modal")?.addEventListener("click", () => { state.modal = false; render(); });
   document.querySelector("#modal-backdrop")?.addEventListener("click", (event) => { if (event.target.id === "modal-backdrop") { state.modal = false; render(); } });
   document.querySelector("#rename-album")?.addEventListener("click", renameAlbum);
-  document.querySelector("#logout")?.addEventListener("click", async () => { await supabase.auth.signOut(); state.user = null; state.memories = []; authView(); });
+  ["#refresh-album", "#refresh-top", "#refresh-album-main"].forEach((selector) => document.querySelector(selector)?.addEventListener("click", async () => { await loadMemories(); render(); }));
+  document.querySelector("#logout")?.addEventListener("click", async () => { if (state.realtimeChannel) await supabase.removeChannel(state.realtimeChannel); state.realtimeChannel = null; await supabase.auth.signOut(); state.user = null; state.album = null; state.memories = []; authView(); });
   document.querySelector("#memory-form")?.addEventListener("submit", handleMemory);
   document.querySelectorAll("[data-delete]").forEach((button) => button.addEventListener("click", () => removeMemory(button.dataset.delete)));
   document.querySelector("#mobile-menu")?.addEventListener("click", () => document.querySelector("#sidebar").classList.toggle("open"));
