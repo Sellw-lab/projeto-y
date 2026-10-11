@@ -198,5 +198,8 @@ async function handleMemory(event) {
 }
 async function removeMemory(id) { const item = state.memories.find((memory) => memory.id === id); if (!item || !confirm("Excluir esta memória?")) return; const result = await supabase.from("memories").delete().eq("id", id); if (!result.error && item.file_path) await supabase.storage.from("memories").remove([item.file_path]); await loadMemories(); render(); }
 const isRecoveryLink = () => new URLSearchParams(window.location.hash.replace(/^#/, "")).get("type") === "recovery";
-supabase.auth.getSession().then(({ data }) => { if (isRecoveryLink()) { state.authMode = "update"; authView(); return; } state.user = data.session?.user || null; startApp(); });
+// Desenha a autenticação antes de consultar a sessão para que uma rede lenta
+// ou uma resposta atrasada do Supabase nunca deixe a página em branco.
+if (isRecoveryLink()) { state.authMode = "update"; authView(); } else { authView(); }
+supabase.auth.getSession().then(({ data }) => { if (isRecoveryLink()) return; state.user = data.session?.user || null; if (state.user) startApp(); }).catch(() => { if (!state.user) authView(); });
 supabase.auth.onAuthStateChange((event, session) => { if (event === "PASSWORD_RECOVERY") { state.authMode = "update"; state.user = null; authView(); return; } if (session?.user && !state.user) { state.user = session.user; startApp(); } });
