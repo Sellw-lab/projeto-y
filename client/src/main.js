@@ -21,16 +21,34 @@ function normalizedFileType(file) { if (!file) return ""; const extension = file
 function videoType(item) { if (item.mime_type?.startsWith("video/")) return item.mime_type; const extension = item.file_path?.split(".").pop()?.toLowerCase(); return { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", ogv: "video/ogg", ogg: "video/ogg", "3gp": "video/3gpp", "3gpp": "video/3gpp" }[extension] || "video/mp4"; }
 async function detectPhotoDate(file) { if (!file?.type.startsWith("image/")) return ""; try { const metadata = await exifr.parse(file, { pick: ["DateTimeOriginal", "CreateDate", "ModifyDate"] }); return dateFromExif(metadata?.DateTimeOriginal || metadata?.CreateDate || metadata?.ModifyDate) || dateFromExif(file.lastModified); } catch { return dateFromExif(file.lastModified); } }
 function authView() {
-  app.innerHTML = `<main class="auth-page"><div class="auth-art"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><div class="auth-art-copy"><p class="eyebrow">um espaço só nosso</p><h1>o que fica,<br/><em>fica aqui.</em></h1><p>Guarde os pequenos instantes que fazem a vida valer a pena.</p></div><span class="auth-flower">✻</span></div><section class="auth-panel"><div class="auth-box"><p class="eyebrow">${state.authMode === "login" ? "bem-vindos de volta" : "começar um álbum"}</p><h2>${state.authMode === "login" ? "entrar no álbum" : "criar seu acesso"}</h2><p class="auth-subtitle">${state.authMode === "login" ? "Entre para continuar guardando suas memórias." : "Use seu e-mail. Depois sua namorada poderá criar o acesso dela."}</p><form id="auth-form"><label>e-mail<input name="email" type="email" required placeholder="voce@email.com" autocomplete="email" /></label><label>senha<input name="password" type="password" required minlength="6" placeholder="mínimo de 6 caracteres" autocomplete="${state.authMode === "login" ? "current-password" : "new-password"}" /></label><button class="add-btn full" type="submit">${state.busy ? "aguarde..." : state.authMode === "login" ? "entrar" : "criar acesso"} <span>↗</span></button></form>${state.message ? `<p class="auth-message">${state.message}</p>` : ""}<button class="auth-switch" id="auth-switch">${state.authMode === "login" ? "Ainda não tenho acesso → criar conta" : "Já tenho uma conta → entrar"}</button></div></section></main>`;
+  const isRecovery = state.authMode === "recovery";
+  const isUpdate = state.authMode === "update";
+  const title = isRecovery ? "recuperar acesso" : isUpdate ? "criar nova senha" : state.authMode === "login" ? "entrar no álbum" : "criar seu acesso";
+  const subtitle = isRecovery ? "Digite o seu e-mail e enviaremos um link para recuperar o acesso." : isUpdate ? "Escolha uma nova senha para voltar ao seu álbum." : state.authMode === "login" ? "Entre para continuar guardando suas memórias." : "Use seu e-mail. Depois sua namorada poderá criar o acesso dela.";
+  const fields = isUpdate ? `<label>nova senha<input name="password" type="password" required minlength="6" placeholder="mínimo de 6 caracteres" autocomplete="new-password" /></label><label>confirmar nova senha<input name="confirmPassword" type="password" required minlength="6" placeholder="repita a nova senha" autocomplete="new-password" /></label>` : `<label>e-mail<input name="email" type="email" required placeholder="voce@email.com" autocomplete="email" /></label>${isRecovery ? "" : `<label>senha<input name="password" type="password" required minlength="6" placeholder="mínimo de 6 caracteres" autocomplete="${state.authMode === "login" ? "current-password" : "new-password"}" /></label>`}`;
+  const submitLabel = isRecovery ? "enviar link" : isUpdate ? "atualizar senha" : state.authMode === "login" ? "entrar" : "criar acesso";
+  const backLabel = isRecovery || isUpdate ? "Voltar para entrar" : state.authMode === "login" ? "Ainda não tenho acesso → criar conta" : "Já tenho uma conta → entrar";
+  app.innerHTML = `<main class="auth-page"><div class="auth-art"><div class="brand"><span class="brand-mark">e</span><span>entre nós</span></div><div class="auth-art-copy"><p class="eyebrow">um espaço só nosso</p><h1>o que fica,<br/><em>fica aqui.</em></h1><p>Guarde os pequenos instantes que fazem a vida valer a pena.</p></div><span class="auth-flower">✻</span></div><section class="auth-panel"><div class="auth-box"><p class="eyebrow">${isRecovery || isUpdate ? "acesso ao álbum" : state.authMode === "login" ? "bem-vindos de volta" : "começar um álbum"}</p><h2>${title}</h2><p class="auth-subtitle">${subtitle}</p><form id="auth-form">${fields}<button class="add-btn full" type="submit">${state.busy ? "aguarde..." : submitLabel} <span>↗</span></button></form>${state.authMode === "login" ? `<button class="auth-recovery" id="auth-recovery" type="button">Esqueci-me da palavra-passe</button>` : ""}${state.message ? `<p class="auth-message">${state.message}</p>` : ""}<button class="auth-switch" id="auth-switch">${backLabel}</button></div></section></main>`;
   document.querySelector("#auth-form").addEventListener("submit", handleAuth);
-  document.querySelector("#auth-switch").addEventListener("click", () => { state.authMode = state.authMode === "login" ? "signup" : "login"; state.message = ""; authView(); });
+  document.querySelector("#auth-recovery")?.addEventListener("click", () => { state.authMode = "recovery"; state.message = ""; authView(); });
+  document.querySelector("#auth-switch").addEventListener("click", () => { state.authMode = isRecovery || isUpdate || state.authMode === "signup" ? "login" : "signup"; state.message = ""; authView(); });
 }
 async function handleAuth(event) {
   event.preventDefault(); state.busy = true; state.message = ""; authView();
-  const data = new FormData(event.target); const email = data.get("email"); const password = data.get("password");
-  const result = state.authMode === "login" ? await supabase.auth.signInWithPassword({ email, password }) : await supabase.auth.signUp({ email, password });
+  const mode = state.authMode; const data = new FormData(event.target); const email = data.get("email"); const password = data.get("password");
+  let result;
+  if (mode === "recovery") {
+    result = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}${window.location.pathname}` });
+  } else if (mode === "update") {
+    if (password !== data.get("confirmPassword")) { state.busy = false; state.message = "As palavras-passe não coincidem."; authView(); return; }
+    result = await supabase.auth.updateUser({ password });
+  } else {
+    result = mode === "login" ? await supabase.auth.signInWithPassword({ email, password }) : await supabase.auth.signUp({ email, password });
+  }
   state.busy = false;
   if (result.error) { state.message = result.error.message.includes("Invalid login") ? "E-mail ou senha incorretos." : result.error.message; authView(); return; }
+  if (mode === "recovery") { state.message = "Verifique o seu e-mail para continuar."; authView(); return; }
+  if (mode === "update") { await supabase.auth.signOut(); state.user = null; state.authMode = "login"; state.message = "Palavra-passe atualizada. Já pode entrar."; authView(); return; }
   if (state.authMode === "signup" && !result.data.session) { state.message = "Conta criada. Verifique seu e-mail para confirmar o acesso e depois entre."; authView(); return; }
   state.user = result.data.user; await startApp();
 }
@@ -179,5 +197,6 @@ async function handleMemory(event) {
   }
 }
 async function removeMemory(id) { const item = state.memories.find((memory) => memory.id === id); if (!item || !confirm("Excluir esta memória?")) return; const result = await supabase.from("memories").delete().eq("id", id); if (!result.error && item.file_path) await supabase.storage.from("memories").remove([item.file_path]); await loadMemories(); render(); }
-supabase.auth.getSession().then(({ data }) => { state.user = data.session?.user || null; startApp(); });
-supabase.auth.onAuthStateChange((_event, session) => { if (session?.user && !state.user) { state.user = session.user; startApp(); } });
+const isRecoveryLink = () => new URLSearchParams(window.location.hash.replace(/^#/, "")).get("type") === "recovery";
+supabase.auth.getSession().then(({ data }) => { if (isRecoveryLink()) { state.authMode = "update"; authView(); return; } state.user = data.session?.user || null; startApp(); });
+supabase.auth.onAuthStateChange((event, session) => { if (event === "PASSWORD_RECOVERY") { state.authMode = "update"; state.user = null; authView(); return; } if (session?.user && !state.user) { state.user = session.user; startApp(); } });
